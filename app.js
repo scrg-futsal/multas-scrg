@@ -56,16 +56,16 @@ const S = {
 };
 window.addEventListener("online", () => { if (S.me) { S.offline = false; scheduleReload(); } });
 window.addEventListener("offline", () => { if (S.me) { S.offline = true; render(); } });
-const memberById = (id) => S.members.find(m => m.id === id);
+const memberById = (id) => (S.allMembers || S.members).find(m => m.id === id);
 const typeById = (id) => S.types.find(t => t.id === id);
-const nameByUser = (uid, none = "Sistema") => { if (!uid) return none; const m = S.members.find(x => x.user_id === uid); return m ? m.name : "Utilizadora removida"; };
+const nameByUser = (uid, none = "Sistema") => { if (!uid) return none; const m = (S.allMembers || S.members).find(x => x.user_id === uid); return m ? m.name : "Utilizadora removida"; };
 const validFines = () => S.fines.filter(f => f.status === "valida");
 const validPays = () => S.payments.filter(p => p.status === "confirmado");
 
 /* ================= DADOS ================= */
-const MEMBER_COLS = "id,name,full_name,kind,is_captain,user_id,active,sort_order,created_at,updated_at,access_blocked,blocked_at";
+const MEMBER_COLS = "id,name,full_name,kind,is_captain,user_id,active,sort_order,created_at,updated_at,access_blocked,blocked_at,removed_at,removed_by,removal_reason,refund_amount,removal_snapshot";
 const CACHE_KEY = "scrg-cache-v1";
-function saveCache() { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: new Date().toISOString(), uid: S.session?.user?.id, members: S.members, types: S.types, fines: S.fines, payments: S.payments, notes: S.notes })); } catch {} }
+function saveCache() { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: new Date().toISOString(), uid: S.session?.user?.id, members: S.members, allMembers: S.allMembers, types: S.types, fines: S.fines, payments: S.payments, notes: S.notes })); } catch {} }
 function readCache(uid) { try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); return c && c.uid === uid ? c : null; } catch { return null; } }
 function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch {} }
 function online() { return navigator.onLine !== false && !S.offline; }
@@ -88,7 +88,13 @@ async function loadAll() {
     fetchAll("scrg_payments", "*", { col: "created_at", asc: false }),
     fetchAll("scrg_notes", "*", null),
   ]);
-  Object.assign(S, { members, types, fines, payments, notes, offline: false, cachedAt: null });
+  // atletas removidas da equipa: saem de todas as contas e listas; ficam só no histórico (capitãs)
+  const removedIds = new Set(members.filter(m => m.removed_at).map(m => m.id));
+  Object.assign(S, {
+    allMembers: members, members: members.filter(m => !m.removed_at), removed: members.filter(m => m.removed_at),
+    archive: { fines: fines.filter(f => removedIds.has(f.member_id)), payments: payments.filter(p => removedIds.has(p.member_id)) },
+    types, fines: fines.filter(f => !removedIds.has(f.member_id)), payments: payments.filter(p => !removedIds.has(p.member_id)),
+    notes, offline: false, cachedAt: null });
   saveCache();
 }
 let reloadT = null;
@@ -553,6 +559,11 @@ function vAdmin() {
           <div class="d">${s?.email ? esc(s.email) : "sem email"} · ${state}${s?.last_sign_in_at ? " · última entrada " + dtLong(s.last_sign_in_at) : ""}</div></div>
           <button class="btn sm" data-edit-member="${m.id}">Gerir</button></div>`; }).join("")}</div>
       <button class="btn block" id="add-member" style="margin-top:10px">+ Adicionar atleta</button></div>
+      ${S.removed?.length ? `<div class="card" style="margin-top:12px"><h3>Atletas removidas <small>histórico · só capitãs</small></h3>
+        <p class="hint">Não contam para nenhum total, gráfico ou ranking e as atletas não as veem. Os registos ficam guardados aqui.</p>
+        <div class="list">${S.removed.map(r => `<div class="li tap" data-removed="${r.id}"><div class="main"><div class="t">${esc(r.name)}</div>
+          <div class="d">Removida a ${dtLong(r.removed_at)} por ${esc(nameByUser(r.removed_by))}${r.removal_reason ? " · " + esc(r.removal_reason) : ""}</div></div>
+          <div class="amt" style="color:var(--warn)">${eur(cents(r.refund_amount))}<div class="d" style="font-family:var(--f-body);font-size:.7rem;font-weight:600">a devolver</div></div></div>`).join("")}</div></div>` : ""}
       <div class="card" style="margin-top:12px"><h3>Conferência de totais</h3><div id="recon" class="small muted">A conferir com a base de dados…</div></div>
       ${S.notes.map(n => `<div class="card" style="margin-top:12px"><h3>${esc(n.title)}</h3><p class="small muted" style="margin:0">${esc(n.body)}</p></div>`).join("")}`;
   } else if (adminTab === "tipos") {
@@ -576,6 +587,7 @@ function vAdmin() {
     after() {
       document.querySelectorAll("[data-at]").forEach(b => b.onclick = () => { adminTab = b.dataset.at; render(); loadAdminData(); });
       document.querySelectorAll("[data-edit-member]").forEach(b => b.onclick = () => openMemberForm(b.dataset.editMember));
+      document.querySelectorAll("[data-removed]").forEach(b => b.onclick = () => openRemovedDetail(b.dataset.removed));
       document.querySelectorAll("[data-edit-type]").forEach(b => b.onclick = () => openTypeForm(b.dataset.editType));
       document.querySelectorAll("[data-exp]").forEach(b => b.onclick = () => exportCsv(b.dataset.exp));
       $("#exp-xlsx") && ($("#exp-xlsx").onclick = exportXlsx);
@@ -611,7 +623,8 @@ function auditRow(a) {
   else if (a.table_name === "scrg_fine_types") what = `${d.name} · ${eur(cents(d.unit_price))}`;
   else if (a.table_name === "scrg_members") what = d.name || "";
   else if (a.table_name === "scrg_invites") what = `${memberById(d.member_id)?.name || ""} · ${d.email || ""}`;
-  let act = { INSERT: "criado", UPDATE: "alterado", DELETE: "eliminado", BLOQUEIO: "acesso bloqueado", DESBLOQUEIO: "acesso desbloqueado" }[a.action];
+  let act = { INSERT: "criado", UPDATE: "alterado", DELETE: "eliminado", BLOQUEIO: "acesso bloqueado", DESBLOQUEIO: "acesso desbloqueado", REMOCAO: "removida da equipa", REPOSICAO: "reposta na equipa" }[a.action];
+  if (a.action === "REMOCAO") act += ` (devolver ${eur(cents(d.refund))}${d.reason ? " · " + d.reason : ""})`;
   if (a.action === "BLOQUEIO" && d.reason) act += ` (${d.reason})`;
   if (a.action === "UPDATE" && a.old_data && a.new_data) {
     if (a.old_data.status !== a.new_data.status && /anulad/.test(a.new_data.status)) act = `anulado (${a.new_data.void_reason || ""})`;
@@ -879,6 +892,50 @@ function blockUi(m) {
       <label class="f">Motivo <span class="hint">opcional</span><input id="breason" placeholder="Ex.: saiu da equipa"></label>
       <button class="btn primary block" id="block2">Sim, bloquear acesso</button></div>`;
 }
+function removeUi(m) {
+  if (m.is_captain || m.user_id === S.me.user_id) return "";
+  const b = balances().find(x => x.m.id === m.id) || { fines: 0, paid: 0, debt: 0 };
+  return `<div class="card stack" style="margin-top:14px;border-color:var(--red)"><h3 style="margin:0">Saiu da equipa?</h3>
+    <p class="small" style="margin:0">Remove ${esc(m.name)} de todas as contas, listas, gráficos e rankings, como se nunca tivesse estado na equipa. O dinheiro que pagou fica marcado para devolver. As restantes atletas não são afetadas.</p>
+    <button class="btn block" id="rm1" style="color:var(--red)">Remover da equipa e devolver o dinheiro</button>
+    <div id="rmconf" class="warnbox stack" hidden>
+      <b>Confirmar a remoção de ${esc(m.name)}</b>
+      <span>Multas registadas: ${eur(b.fines)} · Pagou: ${eur(b.paid)}</span>
+      <span><b>A devolver: ${eur(b.paid)}</b>${b.debt > 0 ? ` · Dívida perdoada: ${eur(b.debt)}` : ""}</span>
+      <span>O total da equipa passa de ${eur(teamTotals().fines)} para ${eur(teamTotals().fines - b.fines)} em multas e de ${eur(teamTotals().paid)} para ${eur(teamTotals().paid - b.paid)} recebidos. Perde também o acesso à app.</span>
+      <label class="f">Motivo <span class="hint">opcional</span><input id="rmreason" placeholder="Ex.: saiu da equipa em outubro"></label>
+      <label class="row" style="font-weight:700"><input type="checkbox" id="rmok"> Confirmo e vou devolver ${eur(b.paid)}</label>
+      <button class="btn primary block" id="rm2">Remover ${esc(m.name)}</button></div></div>`;
+}
+function openRemovedDetail(id) {
+  const r = memberById(id); if (!r) return;
+  const snap = r.removal_snapshot || {};
+  const fines = S.archive.fines.filter(f => f.member_id === id), pays = S.archive.payments.filter(p => p.member_id === id);
+  openSheet(r.name + " (removida)", `
+    <div class="card stack">
+      <div class="small"><b>Removida:</b> ${dtLong(r.removed_at)} por ${esc(nameByUser(r.removed_by))}${r.removal_reason ? `<br><b>Motivo:</b> ${esc(r.removal_reason)}` : ""}</div>
+      <div class="grid g2"><div><div class="hint">Multas na altura</div><b>${eur(cents(snap.fines_total))}</b></div><div><div class="hint">Tinha pago</div><b>${eur(cents(snap.paid_total))}</b></div>
+        <div><div class="hint">A devolver</div><b style="color:var(--warn)">${eur(cents(r.refund_amount))}</b></div><div><div class="hint">Dívida perdoada</div><b>${eur(cents(snap.debt_forgiven))}</b></div></div>
+    </div>
+    <div class="card" style="margin-top:12px"><h3>Multas <small>${fines.length}</small></h3><div class="list">${fines.map(f => fineRowStatic(f)).join("") || '<div class="empty">Sem multas.</div>'}</div></div>
+    <div class="card" style="margin-top:12px"><h3>Pagamentos <small>${pays.length}</small></h3><div class="list">${pays.map(p => `<div class="li"><div class="main"><div class="t">${dLong(p.payment_date)}${p.method ? " · " + esc(p.method) : ""}</div><div class="d">${p.status}</div></div><div class="amt">${eur(cents(p.amount))}</div></div>`).join("") || '<div class="empty">Sem pagamentos.</div>'}</div></div>
+    <div class="stack" style="margin-top:14px"><p class="hint" style="margin:0">Removida por engano? Repor volta a pôr todas as multas e pagamentos dela nas contas da equipa.</p>
+      <button class="btn block" id="restore">Repor ${esc(r.name)} na equipa</button><div id="rres"></div></div>`, () => {
+    $("#restore").onclick = async () => {
+      if (!guardOnline()) return;
+      const btn = $("#restore"); btn.disabled = true;
+      const { data, error } = await sb.functions.invoke("scrg-invite", { body: { action: "restore", member_id: r.id } });
+      let msg = data?.error; if (error) { try { msg = (await error.context.json()).error; } catch { msg = friendlyError(error); } }
+      btn.disabled = false;
+      if (msg) { $("#rres").innerHTML = `<div class="err">${esc(msg)}</div>`; return; }
+      closeSheet(); toast(`${r.name} voltou à equipa.`); await loadAll(); render(); loadAdminData();
+    };
+  });
+}
+function fineRowStatic(f) {
+  const t = typeById(f.fine_type_id);
+  return `<div class="li"><div class="main"><div class="t">${esc(t?.name)}</div><div class="d">${numFmt.format(f.quantity)} × ${eur(cents(f.unit_price))} · ${f.occurrence_date ? dShort(f.occurrence_date) : "sem data"}${f.status === "anulada" ? " · anulada" : ""}</div></div><div class="amt">${eur(cents(f.total))}</div></div>`;
+}
 function openMemberForm(id) {
   const m = id ? memberById(id) : null;
   const acc = m ? adminCache.status.find(x => x.member_id === m.id) : null;
@@ -887,7 +944,7 @@ function openMemberForm(id) {
       <label class="f">Nome a mostrar<input id="mn" value="${esc(m?.name || "")}" maxlength="40" required></label>
       <label class="f">Nome completo <span class="hint">opcional</span><input id="mfull" value="${esc(m?.full_name || "")}" maxlength="80"></label>
       <label class="f">Função<select id="mk"><option value="atleta" ${m?.kind !== "equipa_tecnica" ? "selected" : ""}>Atleta</option><option value="equipa_tecnica" ${m?.kind === "equipa_tecnica" ? "selected" : ""}>Equipa técnica</option></select></label>
-      ${m && !m.is_captain ? `<label class="row"><input type="checkbox" id="ma" ${m.active ? "checked" : ""}> Na equipa (aparece nas listas)</label><span class="hint">Quem sai da equipa: desmarca e bloqueia o acesso. As multas e a dívida dela continuam registadas.</span>` : ""}
+      ${m && !m.is_captain ? `<label class="row"><input type="checkbox" id="ma" ${m.active ? "checked" : ""}> Na equipa (aparece nas listas)</label><span class="hint">Se saiu da equipa e queres que deixe de contar para tudo, usa "Remover da equipa" mais abaixo.</span>` : ""}
       <div id="merr" class="err" hidden></div>
       <button class="btn primary block" type="submit">${m ? "Guardar" : "Adicionar"}</button>
     </form>
@@ -902,7 +959,7 @@ function openMemberForm(id) {
         <button class="btn primary block" id="invite">Criar convite individual</button>
         <p class="hint" style="margin:0">Cria a conta só para este email, com acesso de consulta. Recebes um link para enviar em privado.</p>
         ${blockUi(m)}`}
-      <div id="ires"></div></div>` : ""}`, () => {
+      <div id="ires"></div></div>${removeUi(m)}` : ""}`, () => {
     $("#mf").onsubmit = async (e) => {
       e.preventDefault();
       const row = { name: $("#mn").value.trim(), full_name: $("#mfull").value.trim() || null, kind: $("#mk").value };
@@ -940,6 +997,16 @@ function openMemberForm(id) {
     $("#block1") && ($("#block1").onclick = () => { $("#bconf").hidden = false; $("#block1").hidden = true; });
     $("#block2") && ($("#block2").onclick = () => doBlock("block", $("#block2")));
     $("#unblock") && ($("#unblock").onclick = () => doBlock("unblock", $("#unblock")));
+    $("#rm1") && ($("#rm1").onclick = () => { $("#rmconf").hidden = false; $("#rm1").hidden = true; });
+    $("#rm2") && ($("#rm2").onclick = async () => {
+      if (!guardOnline()) return;
+      if (!$("#rmok").checked) { toast("Marca a confirmação primeiro."); return; }
+      const btn = $("#rm2"); btn.disabled = true; btn.textContent = "A remover…";
+      const { data, error } = await sb.functions.invoke("scrg-invite", { body: { action: "remove", member_id: m.id, reason: $("#rmreason").value.trim() || null } });
+      let msg = data?.error; if (error) { try { msg = (await error.context.json()).error; } catch { msg = friendlyError(error); } }
+      if (msg) { btn.disabled = false; btn.textContent = `Remover ${m.name}`; $("#ires").innerHTML = `<div class="err">${esc(msg)}</div>`; return; }
+      closeSheet(); toast(`${m.name} removida. Devolver ${eur(cents(data.refund))}.`); await loadAll(); render(); loadAdminData();
+    });
   });
 }
 
@@ -1059,7 +1126,7 @@ async function boot() {
   const { data: me, error } = await sb.from("scrg_members").select(MEMBER_COLS).eq("user_id", session.user.id).eq("active", true).maybeSingle();
   const netFail = error && (/Failed to fetch|NetworkError|network/i.test(error.message || "") || !navigator.onLine);
   if (netFail && cache) {
-    Object.assign(S, { members: cache.members, types: cache.types, fines: cache.fines, payments: cache.payments, notes: cache.notes || [], offline: true, cachedAt: cache.at });
+    Object.assign(S, { members: cache.members, allMembers: cache.allMembers || cache.members, removed: [], archive: { fines: [], payments: [] }, types: cache.types, fines: cache.fines, payments: cache.payments, notes: cache.notes || [], offline: true, cachedAt: cache.at });
     const m = S.members.find(x => x.user_id === session.user.id); if (!m) return screenLogin("Sem ligação à internet.");
     S.me = m; S.isCap = !!m.is_captain;
   } else {
@@ -1068,7 +1135,7 @@ async function boot() {
     S.me = me; S.isCap = !!me.is_captain;
     $("#app").innerHTML = authShell('<div class="empty">A carregar as contas da equipa…</div>');
     try { await loadAll(); } catch (e) {
-      if (cache) Object.assign(S, { members: cache.members, types: cache.types, fines: cache.fines, payments: cache.payments, notes: cache.notes || [], offline: true, cachedAt: cache.at });
+      if (cache) Object.assign(S, { members: cache.members, allMembers: cache.allMembers || cache.members, removed: [], archive: { fines: [], payments: [] }, types: cache.types, fines: cache.fines, payments: cache.payments, notes: cache.notes || [], offline: true, cachedAt: cache.at });
       else return screenLogin(friendlyError(e));
     }
   }
