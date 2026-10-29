@@ -223,6 +223,7 @@ const IC = {
   rankings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3"/></svg>',
   admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
 };
+const APP_VERSION = "29/10 · remover atleta";
 const NAV = [["inicio", "Início"], ["atletas", "Atletas"], ["multas", "Multas"], ["pagamentos", "Pagamentos", "Pagam."], ["estatisticas", "Estatísticas", "Estat."], ["rankings", "Rankings", "Ranking"], ["admin", "Administração", "Admin"]];
 
 /* ================= RENDER PRINCIPAL ================= */
@@ -372,7 +373,8 @@ function vPerfil() {
       <div class="kpi"><div class="l">Pago</div><div class="v" style="color:var(--good)">${eur(b.paid)}</div></div>
       <div class="kpi black"><div class="l">${b.debt < 0 ? "Crédito" : "Em dívida"}</div><div class="v">${eur(Math.abs(b.debt))}</div></div>
     </div>
-    ${S.isCap ? `<div class="row" style="margin-top:12px"><button class="btn primary sp" id="p-fine">+ Multar</button><button class="btn dark sp" id="p-pay">+ Pagamento</button></div>` : ""}
+    ${S.isCap ? `<div class="row" style="margin-top:12px"><button class="btn primary sp" id="p-fine">+ Multar</button><button class="btn dark sp" id="p-pay">+ Pagamento</button></div>
+      ${!m.is_captain && m.user_id !== S.me.user_id ? `<button class="btn block ghost" id="p-remove" style="margin-top:8px;color:var(--red)">Saiu da equipa? Remover e devolver o dinheiro</button>` : ""}` : ""}
     <div class="grid md2" style="margin-top:12px">
       <div class="card"><h3>Evolução semanal</h3><div class="chart-box"><canvas id="ch-p"></canvas></div>
         ${ser.undatedFines ? `<p class="hint">Mais ${eur(ser.undatedFines)} importados do Excel sem data.</p>` : ""}</div>
@@ -384,6 +386,7 @@ function vPerfil() {
       weeklyChart("ch-p", ser);
       $("#p-fine") && ($("#p-fine").onclick = () => openFineForm([m.id]));
       $("#p-pay") && ($("#p-pay").onclick = () => openPayForm(m.id));
+      $("#p-remove") && ($("#p-remove").onclick = () => { openMemberForm(m.id); setTimeout(() => { const b = $("#rm1"); if (b) { b.click(); $("#rmconf").scrollIntoView({ behavior: "smooth", block: "center" }); } }, 50); });
     } };
 }
 
@@ -582,7 +585,7 @@ function vAdmin() {
       <button class="btn block" data-exp="pagamentos">Todos os pagamentos</button>
       <button class="btn block" data-exp="semanal">Resumo semanal</button></div></div>`;
   }
-  return { html: `<div class="page-h"><div><h2>Administração</h2><p>Só visível para as capitãs</p></div></div>
+  return { html: `<div class="page-h"><div><h2>Administração</h2><p>Só visível para as capitãs · versão ${APP_VERSION}</p></div></div>
     <div class="seg" role="group">${tabs}</div><div style="margin-top:12px">${body}</div>`,
     after() {
       document.querySelectorAll("[data-at]").forEach(b => b.onclick = () => { adminTab = b.dataset.at; render(); loadAdminData(); });
