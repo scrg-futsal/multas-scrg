@@ -223,7 +223,7 @@ const IC = {
   rankings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3"/></svg>',
   admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
 };
-const APP_VERSION = "29/10 · remover atleta";
+const APP_VERSION = "31/10 · tabela de preços";
 const NAV = [["inicio", "Início"], ["atletas", "Atletas"], ["multas", "Multas"], ["pagamentos", "Pagamentos", "Pagam."], ["estatisticas", "Estatísticas", "Estat."], ["rankings", "Rankings", "Ranking"], ["admin", "Administração", "Admin"]];
 
 /* ================= RENDER PRINCIPAL ================= */
@@ -404,7 +404,23 @@ const memberOptions = (sel, all = "Todas") => `<option value="">${all}</option>`
 const catList = () => [...new Set(S.types.map(t => t.category))];
 const catOptions = (sel) => `<option value="">Todas</option>` + catList().map(c => `<option ${sel === c ? "selected" : ""}>${esc(c)}</option>`).join("");
 
+// tabela de multas e preços, visível a todas (só as capitãs editam)
+function priceTableHtml() {
+  const types = S.types.filter(t => t.active || S.isCap);
+  return `<div class="card"><h3>Tabela de multas <small>${types.filter(t => t.active).length} tipos</small></h3>
+    <p class="hint" style="margin-top:0">Valores em vigor por ocorrência.${S.isCap ? " Toca num tipo para alterar o nome ou o preço." : ""}</p>
+    ${catList().map(c => { const ts = types.filter(t => t.category === c); if (!ts.length) return "";
+      return `<h4 style="margin:14px 0 4px;font-family:var(--f-display);text-transform:uppercase">${esc(c)}</h4><div class="list">${ts.map(t => `<div class="li ${S.isCap ? "tap" : ""}" ${S.isCap ? `data-edit-type="${t.id}"` : ""}><div class="main"><div class="t" style="white-space:normal">${esc(t.name)}</div>${!t.active ? '<div class="d"><span class="pill void">desativado</span></div>' : ""}</div><div class="amt">${eur(cents(t.unit_price))}</div></div>`).join("")}</div>`; }).join("")}
+    ${S.isCap ? `<button class="btn block" id="add-type2" style="margin-top:12px">+ Novo tipo de multa</button>` : ""}</div>`;
+}
 function vMultas() {
+  const tabs = `<div class="seg" role="group" aria-label="Vista" style="margin-bottom:12px"><button data-mt="registos" aria-pressed="${S.multasTab !== "tabela"}">Multas registadas</button><button data-mt="tabela" aria-pressed="${S.multasTab === "tabela"}">Tabela de preços</button></div>`;
+  if (S.multasTab === "tabela") return { html: `<div class="page-h"><div><h2>Multas</h2><p>Quanto custa cada multa</p></div></div>${tabs}${priceTableHtml()}`,
+    after() {
+      document.querySelectorAll("[data-mt]").forEach(b => b.onclick = () => { S.multasTab = b.dataset.mt; render(); });
+      document.querySelectorAll("[data-edit-type]").forEach(b => b.onclick = () => openTypeForm(b.dataset.editType));
+      $("#add-type2") && ($("#add-type2").onclick = () => openTypeForm(null));
+    } };
   const F = S.finesFilter, r = periodRange(F.period);
   const list = S.fines.filter(f => (F.showVoid || f.status === "valida") && (!F.member || f.member_id === F.member) &&
     (!F.cat || typeById(f.fine_type_id)?.category === F.cat) && fineInRange(f, r))
@@ -413,6 +429,7 @@ function vMultas() {
   return { html: `
     <div class="page-h"><div><h2>Multas</h2><p>${list.length} registos · ${eur(tot)}</p></div>
       ${S.isCap ? `<button class="btn primary" id="new-fine">+ Nova multa</button>` : ""}</div>
+    ${tabs}
     <div class="card"><div class="grid g2 g3">
       <label class="f">Atleta<select id="ff-m">${memberOptions(F.member)}</select></label>
       <label class="f">Categoria<select id="ff-c">${catOptions(F.cat)}</select></label>
@@ -426,6 +443,7 @@ function vMultas() {
       $("#ff-c").onchange = (e) => { F.cat = e.target.value; render(); };
       $("#ff-p").onchange = (e) => { F.period = e.target.value; render(); };
       $("#ff-v").onchange = (e) => { F.showVoid = e.target.checked; render(); };
+      document.querySelectorAll("[data-mt]").forEach(b => b.onclick = () => { S.multasTab = b.dataset.mt; render(); });
       $("#new-fine") && ($("#new-fine").onclick = () => openFineForm());
     } };
 }
